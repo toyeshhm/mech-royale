@@ -18,6 +18,8 @@ PATH_SCORE = {"mech.armor": 10, "mech.hp": 9, "mech.regen_per_s": 8, "mech.regen
               "mech.walk_speed": 7, "mech.boost_speed": 2, "mech.energy": 5, "mech.energy_regen": 4,
               "mech.boost_drain": 3, "mech.jet_drain": 1, "mech.turn_rate": 5, "mech.pitch_rate": 1,
               "mech.near_range_bonus": 3, "mech.vision_bonus": 2, "mech.hearing": 1}
+FLEE_R, GAP_IN, GAP_OUT, FLEE_E = 170.0, 60.0, 90.0, 15.0
+NEAR_W = 8.0
 WEAPON_SCORE = 3.5  # a weapon upgrade for a weapon we hold
 
 
@@ -124,6 +126,7 @@ class Bot:
         except (OSError, ValueError, KeyError, IndexError, TypeError) as e:
             mf.log(f"map unavailable, steering straight: {e}")
         self.retreating = False
+        self.fleeing = False
         self.target_id: Optional[float] = None
         self.cover: Optional[Vec] = None
         self.cover_tick = -99.0
@@ -140,9 +143,11 @@ class Bot:
             self.target_id = None
             return npcs[0] if npcs and hpf > 0.5 else None
 
+        multi = sum(1 for f in mechs if f[0] < FLEE_R) >= 2
+
         def rank(f: Any) -> float:
             d, m = f
-            r = float(m.get("hp", 1400)) + 3.0 * d
+            r = float(m.get("hp", 1400)) + (NEAR_W if multi else 3.0) * d
             if self.nav and not self.nav.sees(eye, [m["pos"][0], m["pos"][1], m["pos"][2] + 4.5]):
                 r += 900
             if self.dmg and t - self.dmg[0] < 4 and m["id"] == self.dmg[2]:
@@ -245,8 +250,13 @@ class Bot:
         npcs = [f for f in foes if f[1]["kind"] == "npc" and f[0] < 60]
         target = self._pick_target(mechs, npcs, hpf, eye, t)
         close = [f for f in mechs if f[0] < 120]
-        self.retreating = bool(mechs) and (hpf < (0.65 if self.retreating else 0.4) or len(close) >= 3)
+        self.retreating = bool(mechs) and hpf < (0.65 if self.retreating else 0.4)
         retreat = self.retreating or hpf < 0.4
+        # string the swarm out: with 2+ hunters bunched together, run so the faster/earlier one arrives alone
+        thr = [f for f in mechs if f[0] < FLEE_R]
+        gap = (thr[1][0] - thr[0][0]) if len(thr) >= 2 else 999.0
+        was = self.fleeing
+        self.fleeing = len(thr) >= 2 and gap < (GAP_OUT if was else GAP_IN) and not retreat
 
         # ---- weapon pickup when it is calm and the spot is safe
         pk = None
@@ -280,7 +290,25 @@ class Bot:
         v: Vec = zone_step
         holding = False
         self.loot_id = None
-        if not urgent:
+        flee_boost = False
+        if self.fleeing and not urgent:
+            ax = sum((px - f[1]["pos"][0]) / max(f[0], 1.0) ** 2 for f in thr)
+            ay_ = sum((py - f[1]["pos"][1]) / max(f[0], 1.0) ** 2 for f in thr)
+            away = unit(ax, ay_)
+            best_s = -9.0
+            for k in range(16):
+                a = k * TAU / 16
+                dv = (math.cos(a), math.sin(a))
+                run = 0
+                for r in (8, 16, 24, 32, 44):
+                    if self.nav and not self.nav.free(px + dv[0] * r, py + dv[1] * r):
+                        break
+                    run = r
+                sc = dv[0] * away[0] + dv[1] * away[1] + 0.6 * (dv[0] * g[0] + dv[1] * g[1]) + run / 44.0
+                if sc > best_s:
+                    best_s, v = sc, dv
+            flee_boost = me["energy"] > FLEE_E and thr[0][0] < 140
+        elif not urgent:
             spot = None if retreat else self._loot_goal(obs, pk, here, mechs, hpf, t)
             holding = spot == here
             if spot is not None:
@@ -323,7 +351,7 @@ class Bot:
             v = rotate(base, self.stuck_rot)
             act["jump"] = bool(me["grounded"])
         rushing = self.loot_id is not None and self.loot_id >= 20000 and not holding and me["energy"] > 40
-        boost = ((urgent or stuck) and me["energy"] > (25 if stuck else 12)) or rushing
+        boost = ((urgent or stuck) and me["energy"] > (25 if stuck else 12)) or rushing or flee_boost
         act["boost"] = boost or (stuck and not me["grounded"] and me["energy"] > 10)
         act["move"] = [v[0], v[1]]
         self.cmd_len = math.hypot(*v)
