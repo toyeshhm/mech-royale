@@ -246,6 +246,10 @@ def test_unreachable_pickup_is_dropped():
     for i in range(14):
         o["tick"] = i * 2
         bot.act(o)
+    assert 8010 not in bot.bad  # one stuck moment is forgiven
+    for i in range(14, 50):
+        o["tick"] = i * 2
+        bot.act(o)
     assert 8010 in bot.bad
 
 

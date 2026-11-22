@@ -136,6 +136,7 @@ class Bot:
         self.cover_tick = -99.0
         self.loot_id: Optional[float] = None
         self.known: Dict[int, Dict[str, Any]] = {}  # weapons never despawn, so remember them
+        self.stuck_on: Dict[int, int] = {}
         self.loot = Loot(self.nav)
         self.cl = ClearLine()
 
@@ -189,6 +190,8 @@ class Bot:
         if best:
             self.loot_id = best[1]["id"]
             return here if best[0] <= best[1]["radius"] * 0.55 else (best[1]["pos"][0], best[1]["pos"][1])
+        if pk and pk["kind"] == "laser" and math.hypot(pk["pos"][0] - px, pk["pos"][1] - py) < 35:
+            return (pk["pos"][0], pk["pos"][1])  # a laser this close is worth walking to mid-fight
         if hpf < 0.6 or (mechs and mechs[0][0] < 60):
             return None
         if pk:
@@ -240,7 +243,8 @@ class Bot:
         self.known.update({p["id"]: p for p in obs["pickups"]})
         self.loot.update(obs, (px, py), [px, py, pz + st.get("eye_height", 8)])
         for i, p in list(self.known.items()):
-            if i in self.bad or (i not in seen_ids and math.hypot(p["pos"][0] - px, p["pos"][1] - py) < 30):
+            if i in self.bad or (i not in seen_ids and math.hypot(p["pos"][0] - px, p["pos"][1] - py) < 30
+                                 and (not self.nav or self.nav.sees([px, py, pz + 8], [p["pos"][0], p["pos"][1], p["pos"][2] + 1]))):
                 del self.known[i]
         if obs["offer"]:
             act["pick"] = pick_upgrade(obs["offer"], self.cfg["upgrades"], held)
@@ -291,7 +295,7 @@ class Bot:
             near = mechs[0][0] if mechs else 999.0
             cand = [p for p in self.known.values() if p["kind"] in order and order[p["kind"]] < limit and p["kind"] not in held
                     and p["id"] not in self.bad and math.hypot(p["pos"][0] - px, p["pos"][1] - py) < reach_by[p["kind"]]
-                    and (near > 40 or math.hypot(p["pos"][0] - px, p["pos"][1] - py) < 15)
+                    and (near > 40 or math.hypot(p["pos"][0] - px, p["pos"][1] - py) < (35 if p["kind"] == "laser" else 15))
                     and (math.hypot(p["pos"][0] - cc[0], p["pos"][1] - cc[1]) < cr * 0.9 if t < z["shrink_start"] - 25
                          else math.hypot(p["pos"][0] - nc[0], p["pos"][1] - nc[1]) < nr * 0.85)]
             if cand:
@@ -311,7 +315,7 @@ class Bot:
         holding = False
         self.loot_id = None
         flee_boost = False
-        if self.fleeing and not urgent:
+        if self.fleeing and not urgent and not (pk and pk["kind"] == "laser" and math.hypot(pk["pos"][0] - px, pk["pos"][1] - py) < 35):
             ax = sum((px - f[1]["pos"][0]) / max(f[0], 1.0) ** 2 for f in thr)
             ay_ = sum((py - f[1]["pos"][1]) / max(f[0], 1.0) ** 2 for f in thr)
             away = unit(ax, ay_)
@@ -373,7 +377,9 @@ class Bot:
             self.hist.clear()
             stuck = True
             if pk:
-                self.bad.add(pk["id"])  # unreachable from here, such as a weapon on a roof
+                self.stuck_on[pk["id"]] = self.stuck_on.get(pk["id"], 0) + 1
+                if self.stuck_on[pk["id"]] >= 2:  # twice means unreachable, such as a weapon on a roof
+                    self.bad.add(pk["id"])
             if self.loot_id is not None:
                 self.bad.add(self.loot_id)
                 self.loot.forget(self.loot_id)
