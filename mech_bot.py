@@ -8,6 +8,7 @@ from collections import deque
 from typing import Any, Dict, List, Optional, Tuple
 
 import mechfight as mf
+from dodge import dodge_vec
 from nav import Nav, Walker
 
 Vec = Tuple[float, float]
@@ -20,6 +21,7 @@ PATH_SCORE = {"mech.armor": 10, "mech.hp": 9, "mech.regen_per_s": 8, "mech.regen
               "mech.near_range_bonus": 3, "mech.vision_bonus": 2, "mech.hearing": 1}
 FLEE_R, GAP_IN, GAP_OUT, FLEE_E = 170.0, 60.0, 90.0, 15.0
 NEAR_W = 8.0
+DODGE_K = 0.6
 WEAPON_SCORE = 3.5  # a weapon upgrade for a weapon we hold
 
 
@@ -324,9 +326,14 @@ class Bot:
                     hide = self._hide(me["pos"], mechs, tick)
                     v = self._steer(here, hide) if hide else (-e[0] + g[0] * 0.6 + perp[0] * 0.3, -e[1] + g[1] * 0.6 + perp[1] * 0.3)
                 else:
-                    want = 32.0 if "lightning" in held else 70.0
+                    want = 90.0 if "mortar" in held else 32.0 if "lightning" in held else 70.0
                     pull = 0.5 if target[0] > want + 15 else -0.7 if target[0] < min(want - 12, 20.0) else 0.0
                     v = (v[0] + perp[0] * 0.9 + e[0] * pull, v[1] + perp[1] * 0.9 + e[1] * pull)
+        dv = dodge_vec([px, py, pz + 4.5], obs.get("projectiles", []), mechs, self.sign)
+        dn_ = math.hypot(*dv)
+        if dn_ > 0:
+            k = min(1.0, dn_) * DODGE_K / dn_ if dn_ > 1 else DODGE_K / dn_ * min(dn_, 1.0)
+            v = (v[0] + dv[0] * k * 2, v[1] + dv[1] * k * 2)
         n = math.hypot(*v)
         if n > 1:
             v = (v[0] / n, v[1] / n)
@@ -398,7 +405,9 @@ class Bot:
             prim = None
             lt = ws[slots["lightning"]]["stats"] if "lightning" in slots else None
             ls = ws[slots["laser"]] if "laser" in slots else None
-            if lt and d <= lt["range"] * 0.9 and me["energy"] > 15:
+            if ma and m["kind"] == "mech" and 30 < ma[2] < 200 and mw["cooldown"] <= 0.3:
+                prim = "mortar"
+            elif lt and d <= lt["range"] * 0.9 and me["energy"] > 15:
                 prim = "lightning"
             elif ls and not soft and clear and d <= ls["stats"]["range"] * 0.95 and (ls.get("charge", 0) > 0 or ls["cooldown"] <= 0.8):
                 prim = "laser"
