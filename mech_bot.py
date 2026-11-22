@@ -359,7 +359,7 @@ class Bot:
         if not stuck and len(self.hist) == self.hist.maxlen and len(self.cmds) >= 11 and min(self.cmds) > 0.3 and me["grounded"] \
                 and math.dist(self.hist[0], self.hist[-1]) < 1.5:
             self.stuck_n += 1
-            self.stuck_until = tick + 14
+            self.stuck_until = tick + 8
             self.stuck_rot = (math.pi / 2 + self.rng.random() * 0.7) * (1 if self.stuck_n % 2 else -1)
             self.hist.clear()
             self.cmds.clear()
