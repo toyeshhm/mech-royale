@@ -19,6 +19,7 @@ from upgrades import pick_upgrade
 Vec = Tuple[float, float]
 TAU = 2 * math.pi
 FLEE_R, GAP_IN, GAP_OUT, FLEE_E = 170.0, 60.0, 90.0, 15.0
+FLEE_STICK = 0.35
 NEAR_W = 8.0
 DODGE_K = 0.6
 
@@ -93,7 +94,8 @@ class Bot:
         self.rng = random.Random(hello.get("seed", 0))
         self.reach = float(cfg["loot"]["pickup_radius"])
         self.hist: "deque[Tuple[float, float]]" = deque(maxlen=12)
-        self.cmd_len = 0.0
+        self.cmds: "deque[float]" = deque(maxlen=12)
+        self.flee_k = -1
         self.stuck_until = -1.0
         self.stuck_rot = 0.0
         self.stuck_n = 0
@@ -300,6 +302,7 @@ class Bot:
             ay_ = sum((py - f[1]["pos"][1]) / max(f[0], 1.0) ** 2 for f in thr)
             away = unit(ax, ay_)
             best_s = -9.0
+            prev_k = self.flee_k if was else -1
             for k in range(16):
                 a = k * TAU / 16
                 dv = (math.cos(a), math.sin(a))
@@ -308,9 +311,9 @@ class Bot:
                     if self.nav and not self.nav.free(px + dv[0] * r, py + dv[1] * r):
                         break
                     run = r
-                sc = dv[0] * away[0] + dv[1] * away[1] + 0.6 * (dv[0] * g[0] + dv[1] * g[1]) + run / 44.0
+                sc = dv[0] * away[0] + dv[1] * away[1] + 0.6 * (dv[0] * g[0] + dv[1] * g[1]) + run / 44.0 + (FLEE_STICK if k == prev_k else 0.0)
                 if sc > best_s:
-                    best_s, v = sc, dv
+                    best_s, v, self.flee_k = sc, dv, k
             flee_boost = me["energy"] > FLEE_E and thr[0][0] < 140
         elif not urgent:
             spot = None if retreat else self._loot_goal(obs, pk, here, mechs, hpf, t)
@@ -353,12 +356,13 @@ class Bot:
         # stuck: commanded to move but barely moved in a second
         self.hist.append((px, py))
         stuck = tick < self.stuck_until
-        if not stuck and len(self.hist) == self.hist.maxlen and self.cmd_len > 0.5 and me["grounded"] \
+        if not stuck and len(self.hist) == self.hist.maxlen and len(self.cmds) >= 11 and min(self.cmds) > 0.3 and me["grounded"] \
                 and math.dist(self.hist[0], self.hist[-1]) < 1.5:
             self.stuck_n += 1
             self.stuck_until = tick + 14
             self.stuck_rot = (math.pi / 2 + self.rng.random() * 0.7) * (1 if self.stuck_n % 2 else -1)
             self.hist.clear()
+            self.cmds.clear()
             stuck = True
             if pk:
                 self.stuck_on[pk["id"]] = self.stuck_on.get(pk["id"], 0) + 1
@@ -377,7 +381,7 @@ class Bot:
         boost = ((urgent or stuck) and me["energy"] > (25 if stuck else 12)) or rushing or flee_boost
         act["boost"] = boost or (stuck and not me["grounded"] and me["energy"] > 10)
         act["move"] = [v[0], v[1]]
-        self.cmd_len = math.hypot(*v)
+        self.cmds.append(math.hypot(*v))
 
         # ---- aim and fire
         heard = [s for s in obs.get("sounds", []) if s.get("dist") != "far"
