@@ -160,7 +160,7 @@ class Bot:
             self.cover_tick = tick
         return self.cover
 
-    def _loot_goal(self, obs: Dict[str, Any], pk: Any, here: Vec, mechs: List[Any], hpf: float) -> Optional[Vec]:
+    def _loot_goal(self, obs: Dict[str, Any], pk: Any, here: Vec, mechs: List[Any], hpf: float, drops_only: bool = False) -> Optional[Vec]:
         """Supply drops first (full repair), then weapons, cubes and crates when nothing is close."""
         px, py = here
         me = obs["self"]
@@ -169,14 +169,14 @@ class Bot:
         best = None
         for d in obs.get("drops", []):
             dist = math.hypot(d["pos"][0] - px, d["pos"][1] - py)
-            contested = any(math.hypot(f[1]["pos"][0] - d["pos"][0], f[1]["pos"][1] - d["pos"][1]) < d["radius"] + 6 for f in mechs)
+            contested = any(math.hypot(f[1]["pos"][0] - d["pos"][0], f[1]["pos"][1] - d["pos"][1]) < (60 if drops_only else d["radius"] + 6) for f in mechs)
             if d.get("holder") in (None, me["id"]) and not contested and dist < 220 and dist / speed < d["lands_in"] + 20 \
                     and d["id"] not in self.bad and (best is None or dist < best[0]):
                 best = (dist, d)
         if best:
             self.loot_id = best[1]["id"]
             return here if best[0] <= best[1]["radius"] * 0.55 else (best[1]["pos"][0], best[1]["pos"][1])
-        if hpf < 0.6 or (mechs and mechs[0][0] < 60):
+        if drops_only or hpf < 0.6 or (mechs and mechs[0][0] < 60):
             return None
         if pk:
             return (pk["pos"][0], pk["pos"][1])
@@ -243,12 +243,12 @@ class Bot:
         npcs = [f for f in foes if f[1]["kind"] == "npc" and f[0] < 60]
         target = self._pick_target(mechs, npcs, hpf, eye, t)
         close = [f for f in mechs if f[0] < 120]
-        self.retreating = bool(mechs) and (hpf < (0.65 if self.retreating else 0.4) or len(close) >= 3)
+        self.retreating = bool(mechs) and (hpf < (0.85 if self.retreating else 0.4) or len(close) >= 3)
         retreat = self.retreating or hpf < 0.4
 
         # ---- weapon pickup when it is calm and the spot is safe
         pk = None
-        order = {"lightning": 0, "laser": 1, "mortar": 2}
+        order = {"laser": 0, "lightning": 1, "mortar": 2}
         swap = None
         if None not in ws:
             extra = [i for i, w in enumerate(ws) if w and w["kind"] != "gun" and not w.get("charge")]
@@ -275,23 +275,27 @@ class Bot:
         holding = False
         self.loot_id = None
         if not urgent:
-            spot = None if retreat else self._loot_goal(obs, pk, here, mechs, hpf)
+            spot = self._loot_goal(obs, pk, here, mechs, hpf, drops_only=retreat)
             holding = spot == here
             if spot is not None:
                 v = self._steer(here, spot)
             elif not mechs and hpf < 0.6:
                 v = (0.0, 0.0)  # nobody in view: stand still and let regen work
-            if target and target[1]["kind"] == "mech" and target[0] < 150 and not holding:
+            hold_m = 160.0 if "laser" in held else 115.0  # house bots rarely hit past 140 m
+            if target and target[1]["kind"] == "mech" and target[0] < hold_m + 60 and not holding:
                 e = unit(target[1]["pos"][0] - px, target[1]["pos"][1] - py)
                 perp = (-e[1] * self.sign, e[0] * self.sign)
                 if self.nav and not self.nav.free(px + perp[0] * 6, py + perp[1] * 6):
                     self.sign, perp = -self.sign, (-perp[0], -perp[1])
-                if retreat:
+                if retreat and spot is None:
                     hide = self._hide(me["pos"], mechs, tick)
                     v = self._steer(here, hide) if hide else (-e[0] + g[0] * 0.6 + perp[0] * 0.3, -e[1] + g[1] * 0.6 + perp[1] * 0.3)
+                elif retreat:
+                    pass  # keep heading for the supply drop
                 else:
-                    want = 32.0 if "lightning" in held else 70.0
-                    pull = 0.5 if target[0] > want + 15 else -0.7 if target[0] < min(want - 12, 20.0) else 0.0
+                    pull = 0.6 if target[0] > hold_m + 25 else -0.8 if target[0] < hold_m - 30 else 0.0
+                    if pull < 0 and self.nav and not self.nav.free(px - e[0] * 6, py - e[1] * 6):
+                        pull = 0.0
                     v = (v[0] + perp[0] * 0.9 + e[0] * pull, v[1] + perp[1] * 0.9 + e[1] * pull)
         n = math.hypot(*v)
         if n > 1:
@@ -353,7 +357,7 @@ class Bot:
             if gw:
                 want["gun"] = angles_to(src, lead_point(src, ctr, tv, gw["stats"]["speed"]))
             if "laser" in slots and not soft:
-                want["laser"] = angles_to(src, ctr)
+                want["laser"] = angles_to(src, [ctr[i] + tv[i] * 0.1 for i in range(3)])  # one decision ahead
             if "lightning" in slots:
                 want["lightning"] = angles_to(src, ctr)
             mw = ws[slots["mortar"]] if "mortar" in slots else None
@@ -366,13 +370,15 @@ class Bot:
             ls = ws[slots["laser"]] if "laser" in slots else None
             if lt and d <= lt["range"] * 0.9 and me["energy"] > 15:
                 prim = "lightning"
-            elif ls and not soft and clear and d <= ls["stats"]["range"] * 0.95 and (ls.get("charge", 0) > 0 or ls["cooldown"] <= 0.8):
+            elif ls and not soft and clear and d <= ls["stats"]["range"] * 0.95 and (ls.get("charge", 0) > 0 or ls["cooldown"] <= 0.1):
                 prim = "laser"
             elif gw and d <= gw["stats"]["range"] * 0.95:
                 prim = "gun"
             elif ma and 22 < ma[2]:
                 prim = "mortar"
             aim = want.get(prim) if prim else None
+            if prim == "laser" and "gun" in want and ls.get("charge", 0.0) < ls["stats"]["charge"] - 0.2:
+                aim = want["gun"]  # keep the gun on target while charging, snap to the beam line at the end
             if aim is None:
                 aim = (math.atan2(m["pos"][1] - py, m["pos"][0] - px), 0.0)
             yaw, pitch = aim[0], min(hi, max(lo, aim[1]))
@@ -398,9 +404,11 @@ class Bot:
                 elif lc >= full * 0.95:
                     fire[slots["laser"]] = e > tol  # release once lined up
                 else:
-                    fire[slots["laser"]] = ls["cooldown"] <= 0.1 and e < tol * 3
+                    fire[slots["laser"]] = ls["cooldown"] <= 0.1 and e < max(tol * 3, 0.08)
             if mw and ma and ma[2] > 20 and prim == "mortar":
                 fire[slots["mortar"]] = err(want["mortar"]) < 0.04
+            if retreat and d > 80 and not (m["kind"] == "mech" and m.get("hp", 9999) <= 400):
+                fire = [False, False]  # dealing damage would reset our regen timer
         elif self.dmg and t - self.dmg[0] < 2.5:
             yaw, pitch = self.dmg[1], 0.0  # face where we were hit from: rear hits do 1.5x
         elif heard:
