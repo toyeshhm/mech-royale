@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import mechfight as mf
 from dodge import dodge_vec
+from loot import Loot
 from nav import Nav, Walker
 
 Vec = Tuple[float, float]
@@ -134,6 +135,7 @@ class Bot:
         self.cover_tick = -99.0
         self.loot_id: Optional[float] = None
         self.known: Dict[int, Dict[str, Any]] = {}  # weapons never despawn, so remember them
+        self.loot = Loot(self.nav)
 
     def _steer(self, here: Vec, goal: Vec) -> Vec:
         if math.hypot(goal[0] - here[0], goal[1] - here[1]) < 1.5:
@@ -189,16 +191,23 @@ class Bot:
             return None
         if pk:
             return (pk["pos"][0], pk["pos"][1])
-        early = t < 60 and "laser" not in [w["kind"] for w in me["weapons"] if w]
-        for kind, reach in (("cubes", 75.0), ("crates", 150.0 if early else 90.0)):
-            items = [c for c in obs.get(kind, []) if c["id"] not in self.bad and math.hypot(c["pos"][0] - px, c["pos"][1] - py) < reach]
-            if items:
-                c = min(items, key=lambda i: math.hypot(i["pos"][0] - px, i["pos"][1] - py))
-                self.loot_id = c["id"]
-                if kind == "crates" and math.hypot(c["pos"][0] - px, c["pos"][1] - py) < 22:
-                    return here
-                return (c["pos"][0], c["pos"][1])
-        return None
+        need = "laser" not in [w["kind"] for w in me["weapons"] if w] or me.get("cubes", 0) < min(10, t / 25.0)
+        z = obs["zone"]
+        cc, cr = zone_circle(z, t)
+        nc, nr = z["next_center"], z["next_radius"]
+        if t < z["shrink_start"] - 25:
+            ok = lambda x, y: math.hypot(x - cc[0], y - cc[1]) < cr * 0.85  # noqa: E731
+        else:
+            ok = lambda x, y: math.hypot(x - nc[0], y - nc[1]) < nr * 0.8  # noqa: E731
+        spot = self.loot.pick(here, need and not (mechs and mechs[0][0] < 110), ok, self.bad, (nc[0], nc[1]))
+        if spot is None:
+            return None
+        if self.loot.goal is not None:
+            self.loot_id = self.loot.goal[1]
+            if self.loot.goal[0] == "crates" and math.hypot(spot[0] - px, spot[1] - py) < 22 and self.nav \
+                    and self.nav.sees([px, py, me["pos"][2] + 8], [spot[0], spot[1], me["pos"][2] + 1.2]):
+                return here
+        return spot
 
     def act(self, obs: mf.Observation) -> mf.Action:
         try:
@@ -227,6 +236,7 @@ class Bot:
                 self.bad.add(e["id"])
         seen_ids = {p["id"] for p in obs["pickups"]}
         self.known.update({p["id"]: p for p in obs["pickups"]})
+        self.loot.update(obs, (px, py), [px, py, pz + st.get("eye_height", 8)])
         for i, p in list(self.known.items()):
             if i in self.bad or (i not in seen_ids and math.hypot(p["pos"][0] - px, p["pos"][1] - py) < 30):
                 del self.known[i]
@@ -357,6 +367,7 @@ class Bot:
                 self.bad.add(pk["id"])  # unreachable from here, such as a weapon on a roof
             if self.loot_id is not None:
                 self.bad.add(self.loot_id)
+                self.loot.forget(self.loot_id)
             if self.walker:
                 self.walker.reset()
         if stuck:

@@ -98,8 +98,25 @@ def test_zone_circle_and_goal():
     assert a["boost"] and a["move"][0] < -0.9  # outside: run in, boosting
     o = base_obs()
     o["self"]["pos"] = [10.0, 0.0, 0.0]
+    o["self"]["weapons"] = [weapon("gun"), weapon("laser", charge=0.0)]
+    o["self"]["cubes"] = 10
     a = bot.act(o)
-    assert a["move"] == [0.0, 0.0]  # safely inside: stay put
+    assert a["move"] == [0.0, 0.0]  # safely inside and stocked: stay put
+    o["self"]["weapons"] = [weapon("gun"), None]
+    assert bot.act(o)["move"] != [0.0, 0.0]  # no laser: scout for loot
+
+
+def test_loot_memory_and_pick():
+    from loot import Loot
+    lt = Loot(None)
+    lt.update({"crates": [{"id": 1, "pos": [50.0, 0.0, 0.0]}], "cubes": [{"id": 2, "pos": [-90.0, 0.0, 0.0]}]}, (0.0, 0.0), [0.0, 0.0, 8.0])
+    ok = lambda x, y: True  # noqa: E731
+    assert lt.pick((0.0, 0.0), False, ok, set()) == (50.0, 0.0) and lt.goal == ("crates", 1)
+    lt.update({"crates": [], "cubes": []}, (0.0, 0.0), [0.0, 0.0, 8.0])  # both within 40 m? crate at 50 stays, cube at 90 stays
+    assert lt.pick((0.0, 0.0), False, ok, {1}) == (-90.0, 0.0)
+    lt.update({"crates": [], "cubes": []}, (45.0, 0.0), [45.0, 0.0, 8.0])  # crate now in sight and absent: forgotten
+    assert 1 not in lt.mem["crates"]
+    assert lt.pick((45.0, 0.0), True, lambda x, y: x > 0, set()) is not None  # nothing left to the east of home: scout
 
 
 def test_aim_gate_and_fire():
