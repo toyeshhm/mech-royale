@@ -219,6 +219,17 @@ def test_stuck_escape():
     assert jumped
 
 
+def test_unreachable_pickup_is_dropped():
+    bot = mb.Bot(HELLO)
+    o = base_obs(pickups=[{"id": 8010, "kind": "laser", "pos": [9.0, 0.0, 20.0]}])
+    o["self"]["weapons"] = [weapon("gun"), None]
+    o["self"]["grounded"] = True
+    for i in range(14):
+        o["tick"] = i * 2
+        bot.act(o)
+    assert 8010 in bot.bad
+
+
 def test_bad_input_never_raises():
     bot = mb.Bot(HELLO)
     a = bot.act({"tick": 4, "zone": {"next_center": [0, 0]}, "self": {"pos": [1, 1, 1]}})

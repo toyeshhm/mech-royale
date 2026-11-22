@@ -221,6 +221,8 @@ class Bot:
             self.stuck_rot = (math.pi / 2 + self.rng.random() * 0.7) * (1 if self.stuck_n % 2 else -1)
             self.hist.clear()
             stuck = True
+            if pk:
+                self.bad.add(pk["id"])  # unreachable from here, such as a weapon on a roof
         if stuck:
             base = v if math.hypot(*v) > 0.1 else (g if math.hypot(*g) > 0.1 else unit(nc[0] - px, nc[1] - py))
             v = rotate(base, self.stuck_rot)
