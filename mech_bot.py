@@ -10,21 +10,17 @@ from typing import Any, Dict, List, Optional, Tuple
 import mechfight as mf
 from clearline import ClearLine
 from dodge import dodge_vec
+from laststand import committed
 from loot import Loot
 from nav import Nav, Walker
+from tempo import hold
+from upgrades import pick_upgrade
 
 Vec = Tuple[float, float]
 TAU = 2 * math.pi
-# Offer scoring by effect path: survival first. Unknown paths score 1, so new upgrades still rank.
-DMG_FIRST = {"laser_damage": 30, "gun_damage": 29, "gun_rate": 28, "laser_charge": 20}
-PATH_SCORE = {"mech.armor": 10, "mech.hp": 9, "mech.regen_per_s": 8, "mech.regen_delay": 6,
-              "mech.walk_speed": 7, "mech.boost_speed": 2, "mech.energy": 5, "mech.energy_regen": 4,
-              "mech.boost_drain": 3, "mech.jet_drain": 1, "mech.turn_rate": 5, "mech.pitch_rate": 1,
-              "mech.near_range_bonus": 3, "mech.vision_bonus": 2, "mech.hearing": 1}
 FLEE_R, GAP_IN, GAP_OUT, FLEE_E = 170.0, 60.0, 90.0, 15.0
 NEAR_W = 8.0
 DODGE_K = 0.6
-WEAPON_SCORE = 3.5  # a weapon upgrade for a weapon we hold
 
 
 def wrap(a: float) -> float:
@@ -82,22 +78,6 @@ def zone_circle(z: Dict[str, Any], t: float) -> Tuple[Vec, float]:
     f = 0.0 if t <= a else 1.0 if t >= b or b <= a else (t - a) / (b - a)
     c, n = z["center"], z["next_center"]
     return ((c[0] + (n[0] - c[0]) * f, c[1] + (n[1] - c[1]) * f), z["radius"] + (z["next_radius"] - z["radius"]) * f)
-
-
-def pick_upgrade(offer: Dict[str, Any], defs: List[Dict[str, Any]], held: List[str]) -> int:
-    by_id = {u["id"]: u for u in defs}
-    best, best_i = -1.0, 0
-    for i, ch in enumerate(offer["choices"]):
-        s = float(DMG_FIRST.get(ch["id"], 0))
-        for e in by_id.get(ch["id"], {}).get("effects", []):
-            path = str(e.get("path", ""))
-            if path.startswith("weapons."):
-                s += WEAPON_SCORE if path.split(".")[1] in held else 0.5
-            else:
-                s += PATH_SCORE.get(path, 1)
-        if s > best:
-            best, best_i = s, i
-    return best_i
 
 
 def finite(v: Any) -> Any:
@@ -275,7 +255,7 @@ class Bot:
         target = self._pick_target(mechs, npcs, hpf, eye, t)
         close = [f for f in mechs if f[0] < 120]
         self.retreating = bool(mechs) and hpf < (0.65 if self.retreating else 0.4)
-        retreat = self.retreating or hpf < 0.4
+        retreat = (self.retreating or hpf < 0.4) and not committed(mechs, hpf)
         # string the swarm out: with 2+ hunters bunched together, run so the faster/earlier one arrives alone
         thr = [f for f in mechs if f[0] < FLEE_R]
         gap = (thr[1][0] - thr[0][0]) if len(thr) >= 2 else 999.0
@@ -358,6 +338,10 @@ class Bot:
                             cg = self.cl.step(self.nav, here, pz, mh, tp, tick)
                             if cg:
                                 v = self._steer(here, cg)
+        if not urgent and not retreat and not self.fleeing and target and self.nav:
+            ls0 = next((w for w in ws if w and w["kind"] == "laser"), None)
+            if hold(ls0, target, mechs, self.nav.sees([px, py, pz + st.get("muzzle_height", 7)], [target[1]["pos"][0], target[1]["pos"][1], target[1]["pos"][2] + 4.5])):
+                v = (0.0, 0.0)
         dv = dodge_vec([px, py, pz + 4.5], obs.get("projectiles", []), mechs, self.sign)
         dn_ = math.hypot(*dv)
         if dn_ > 0:
