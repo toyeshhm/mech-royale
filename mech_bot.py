@@ -133,6 +133,7 @@ class Bot:
         self.cover: Optional[Vec] = None
         self.cover_tick = -99.0
         self.loot_id: Optional[float] = None
+        self.known: Dict[int, Dict[str, Any]] = {}  # weapons never despawn, so remember them
 
     def _steer(self, here: Vec, goal: Vec) -> Vec:
         if math.hypot(goal[0] - here[0], goal[1] - here[1]) < 1.5:
@@ -224,6 +225,11 @@ class Bot:
                 self.dmg = (t, float(e["bearing"]), e["by"])
             elif e["type"] == "take_failed":
                 self.bad.add(e["id"])
+        seen_ids = {p["id"] for p in obs["pickups"]}
+        self.known.update({p["id"]: p for p in obs["pickups"]})
+        for i, p in list(self.known.items()):
+            if i in self.bad or (i not in seen_ids and math.hypot(p["pos"][0] - px, p["pos"][1] - py) < 30):
+                del self.known[i]
         if obs["offer"]:
             act["pick"] = pick_upgrade(obs["offer"], self.cfg["upgrades"], held)
 
@@ -271,7 +277,7 @@ class Bot:
             limit = order.get(ws[swap]["kind"], 3) if swap is not None else 9
             reach_by = {"laser": 190.0 if self.nav else 40.0, "lightning": 90.0 if self.nav else 40.0, "mortar": 40.0}
             near = mechs[0][0] if mechs else 999.0
-            cand = [p for p in obs["pickups"] if p["kind"] in order and order[p["kind"]] < limit and p["kind"] not in held
+            cand = [p for p in self.known.values() if p["kind"] in order and order[p["kind"]] < limit and p["kind"] not in held
                     and p["id"] not in self.bad and math.hypot(p["pos"][0] - px, p["pos"][1] - py) < reach_by[p["kind"]]
                     and (near > 40 or math.hypot(p["pos"][0] - px, p["pos"][1] - py) < 15)
                     and (math.hypot(p["pos"][0] - cc[0], p["pos"][1] - cc[1]) < cr * 0.9 if t < z["shrink_start"] - 25
@@ -448,8 +454,8 @@ class Bot:
             yaw, pitch = self.dmg[1], 0.0  # face where we were hit from: rear hits do 1.5x
         elif heard:
             yaw, pitch = heard[-1]["bearing"], 0.0  # look toward nearby fighting or footsteps
-        elif math.hypot(*v) > 0.1:
-            yaw, pitch = math.atan2(v[1], v[0]), 0.0
+        else:
+            yaw, pitch = wrap(me["aim"][0] + 0.38), 0.0  # idle: sweep the 120-degree vision wedge all the way round
         act["aim"] = [yaw, pitch]
         act["fire"] = fire
         gun = next((w for w in ws if w and w["kind"] == "gun"), None)
