@@ -176,15 +176,17 @@ def test_pickups():
     assert "take" not in bot.act(o)  # blacklisted
     o = base_obs(pickups=[{"id": 8002, "kind": "gun", "pos": [2.0, 0.0, 0.0]}])
     assert "take" not in bot.act(o)
-    o = base_obs(pickups=[{"id": 8003, "kind": "laser", "pos": [2.0, 0.0, 0.0]}], mechs=[enemy([40, 0, 0])])
+    o = base_obs(pickups=[{"id": 8003, "kind": "laser", "pos": [20.0, 0.0, 0.0]}], mechs=[enemy([-30, 0, 0])])
     assert "take" not in bot.act(o)  # enemy close: not safe
 
 
-def test_offer_prefers_survival():
+def test_offer_prefers_damage_then_survival():
     defs = HELLO["config"]["upgrades"]
     offer = {"id": 1, "expires": 9, "choices": [{"id": "gun_rate", "name": "", "desc": ""}, {"id": "armor", "name": "", "desc": ""},
                                                  {"id": "sensors", "name": "", "desc": ""}]}
-    assert mb.pick_upgrade(offer, defs, ["gun"]) == 1
+    assert mb.pick_upgrade(offer, defs, ["gun"]) == 0  # damage upgrades first
+    offer["choices"][0]["id"] = "sensors"
+    assert mb.pick_upgrade(offer, defs, ["gun"]) == 1  # survival beats the rest
     offer["choices"] = [{"id": "mystery", "name": "", "desc": ""}, {"id": "gun_damage", "name": "", "desc": ""}]
     assert mb.pick_upgrade(offer, defs, ["gun"]) == 1  # unknown id never crashes
     o = base_obs(offer=offer)
