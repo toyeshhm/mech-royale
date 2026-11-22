@@ -6,6 +6,7 @@ leads gun shots, charges and releases the laser, lobs mortar shells by ballistic
 lightning inside its cone, strafes, backs off at low HP, and picks survival upgrades.
 
 - `mech_bot.py`: the bot.
+- `nav.py`: walkable grid, A* paths, line of sight and cover from the kit's map.
 - `mechfight.py`: the kit's wrapper, provided code, unmodified.
 - `tests/test_bot.py`: assert-based tests of the decision logic against the kit's recorded stream
   (`tests/data/stream.jsonl.gz`, also from the kit).
@@ -27,5 +28,5 @@ python3 check/check.py --map-dir /arena -- docker run --rm -i --platform linux/a
   -v "$PWD/arena:/arena:ro" mech-royale-entry
 ```
 
-Known limit: the bot does not read the map, so it has no path planning around buildings.
-It escapes by jumping and sidestepping when it stops making progress.
+The bot reads the kit's map (`nav.py`) for A* paths, line of sight and cover. If the map cannot
+be read it steers straight and escapes by jumping and sidestepping.
