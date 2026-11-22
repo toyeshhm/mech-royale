@@ -8,6 +8,7 @@ from collections import deque
 from typing import Any, Dict, List, Optional, Tuple
 
 import mechfight as mf
+from clearline import ClearLine
 from dodge import dodge_vec
 from loot import Loot
 from nav import Nav, Walker
@@ -136,6 +137,7 @@ class Bot:
         self.loot_id: Optional[float] = None
         self.known: Dict[int, Dict[str, Any]] = {}  # weapons never despawn, so remember them
         self.loot = Loot(self.nav)
+        self.cl = ClearLine()
 
     def _steer(self, here: Vec, goal: Vec) -> Vec:
         if math.hypot(goal[0] - here[0], goal[1] - here[1]) < 1.5:
@@ -278,14 +280,14 @@ class Bot:
 
         # ---- weapon pickup when it is calm and the spot is safe
         pk = None
-        order = {"laser": 0, "lightning": 1, "mortar": 2}
+        order = {"laser": 0, "mortar": 1, "lightning": 2}
         swap = None
         if None not in ws:
             extra = [i for i, w in enumerate(ws) if w and w["kind"] != "gun" and not w.get("charge")]
             swap = max(extra, key=lambda i: order.get(ws[i]["kind"], 3)) if extra else None
         if not urgent and not retreat and hpf > 0.3 and (None in ws or swap is not None):
             limit = order.get(ws[swap]["kind"], 3) if swap is not None else 9
-            reach_by = {"laser": 190.0 if self.nav else 40.0, "lightning": 90.0 if self.nav else 40.0, "mortar": 40.0}
+            reach_by = {"laser": 190.0 if self.nav else 40.0, "lightning": 90.0 if self.nav else 40.0, "mortar": 120.0 if self.nav else 40.0}
             near = mechs[0][0] if mechs else 999.0
             cand = [p for p in self.known.values() if p["kind"] in order and order[p["kind"]] < limit and p["kind"] not in held
                     and p["id"] not in self.bad and math.hypot(p["pos"][0] - px, p["pos"][1] - py) < reach_by[p["kind"]]
@@ -342,9 +344,16 @@ class Bot:
                     hide = self._hide(me["pos"], mechs, tick)
                     v = self._steer(here, hide) if hide else (-e[0] + g[0] * 0.6 + perp[0] * 0.3, -e[1] + g[1] * 0.6 + perp[1] * 0.3)
                 else:
-                    want = 90.0 if "mortar" in held else 32.0 if "lightning" in held else 70.0
+                    want = 90.0 if "mortar" in held else 32.0 if "lightning" in held else 110.0 if "laser" in held else 70.0
                     pull = 0.5 if target[0] > want + 15 else -0.7 if target[0] < min(want - 12, 20.0) else 0.0
                     v = (v[0] + perp[0] * 0.9 + e[0] * pull, v[1] + perp[1] * 0.9 + e[1] * pull)
+                    if "laser" in held and target[1]["kind"] == "mech" and 25 < target[0] < 240 and self.nav:
+                        tp = [target[1]["pos"][0], target[1]["pos"][1], target[1]["pos"][2] + 4.5]
+                        mh = st.get("muzzle_height", 7)
+                        if not self.nav.sees([px, py, pz + mh], tp):
+                            cg = self.cl.step(self.nav, here, pz, mh, tp, tick)
+                            if cg:
+                                v = self._steer(here, cg)
         dv = dodge_vec([px, py, pz + 4.5], obs.get("projectiles", []), mechs, self.sign)
         dn_ = math.hypot(*dv)
         if dn_ > 0:
